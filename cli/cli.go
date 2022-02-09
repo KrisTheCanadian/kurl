@@ -35,6 +35,22 @@ func Parse() {
 		setGetOptions(opts, getFlag, getVerboseFlag, getHeaderFlag)
 	case "post":
 		setPostOptions(opts, postFlag, postVerboseFlag, postHeaderFlag, postFileFlag, postDataFlag)
+	case "help":
+		if len(os.Args) < 3 {
+			fmt.Println("expected 'get' or 'post' commands")
+			os.Exit(1)
+		}
+
+		if os.Args[2] != "" {
+			if os.Args[2] == "get" {
+				fmt.Println("usage: httpc get [-v] [-h key:value] URL")
+				os.Exit(1)
+			}
+			if os.Args[2] == "post" {
+				fmt.Println("usage: httpc post [-v] [-h key:value] [-d inline-data] [-f file] URL")
+				os.Exit(1)
+			}
+		}
 
 	default:
 		fmt.Println("expected 'get' or 'post' commands")
