@@ -1,24 +1,17 @@
 package main
 
 import (
+	"fmt"
 	"github.com/kristhecanadian/kurl/cli"
+	"github.com/kristhecanadian/kurl/req"
 	"log"
 )
 
 func main() {
-	cli.Parse()
-	//con, err := net.Dial("tcp", "google.ca:80")
-	//checkError(&err)
-	//
-	//req := "HEAD / HTTP/1.0\r\n\r\n"
-	//
-	//_, err = con.Write([]byte(req))
-	//checkError(&err)
-	//
-	//res, err := ioutil.ReadAll(con)
-	//checkError(&err)
-	//
-	//fmt.Println(string(res))
+	opts := cli.Parse()
+	fmt.Println(opts)
+	fmt.Println("done!")
+	req.Request(opts)
 }
 
 func checkError(err *error) {
