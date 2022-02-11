@@ -122,7 +122,7 @@ func initFlags() (*flag.FlagSet, *bool, headerFlags, *flag.FlagSet, *bool, *stri
 	postFlag := flag.NewFlagSet("post", flag.ExitOnError)
 	postVerboseFlag := postFlag.Bool("v", false, "Prints the detail of the response such as protocol, status,\nand headers.")
 	postFlag.Var(&headerFlagValue, "h", "header")
-	postDataFlag := postFlag.String("d", "d", "Associates an inline Data to the body HTTP POST request.")
+	postDataFlag := postFlag.String("d", "", "Associates an inline Data to the body HTTP POST request.")
 	postFileFlag := postFlag.String("f", "", "Associates the content of a File to the body HTTP POST")
 	return getFlag, getVerboseFlag, headerFlagValue, postFlag, postVerboseFlag, postDataFlag, postFileFlag
 }
