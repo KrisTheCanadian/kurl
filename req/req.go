@@ -1,9 +1,9 @@
 package req
 
 import (
+	"bufio"
 	"fmt"
 	"github.com/kristhecanadian/kurl/cli"
-	"io/ioutil"
 	"net"
 	"net/url"
 	"os"
@@ -15,13 +15,33 @@ const (
 	http int = 80
 )
 
-func Request(opts *cli.Options) {
+type Response struct {
+	Proto      string
+	StatusCode int
+	Headers    map[string]string
+	Body       string
+}
+
+func Request(opts *cli.Options) (res Response, resString string) {
 	u := parseUrl(opts)
 	host := u.Host
 	port := u.Port()
-	req := "" + opts.Method + " / HTTP/1.0\r\n"
+	qry := ""
+	if u.RawQuery != "" {
+		qry += "?" + u.RawQuery
+	}
+	req := "" + opts.Method + " " + u.Path + qry + " HTTP/1.1\r\n"
 
-	req = parseHeader(opts, req)
+	req = addHeaders(opts, req)
+
+	if opts.Method == "POST" {
+		if _, ok := opts.Header["Content-Length"]; !ok {
+			length := string(strconv.Itoa(len(opts.Data)))
+			req += "Content-Length: " + length + "\r\n"
+			opts.Header["Content-Length"] = length
+		}
+		req += "\r\n" + opts.Data
+	}
 
 	port = parseProtocol(u, port)
 
@@ -31,26 +51,60 @@ func Request(opts *cli.Options) {
 	_, err = con.Write([]byte(req))
 	checkError(&err)
 
-	res, err := ioutil.ReadAll(con)
-	checkError(&err)
+	scnr := bufio.NewScanner(con)
 
-	fmt.Println(string(res))
+	res = Response{}
+	// Scan status line
+	if !scnr.Scan() {
+		panic("No status line!")
+	}
+
+	line := scnr.Text()
+	split := strings.Split(line, " ")
+
+	proto := split[0]
+	statusCode := split[1]
+
+	res.Proto = proto
+	res.StatusCode, _ = strconv.Atoi(statusCode)
+	res.Headers = make(map[string]string, 10)
+	resString = line + "\n"
+	// Read the Headers
+	for scnr.Scan() {
+		line := scnr.Text()
+
+		// When we see the blank line, Headers are done
+		if line == "" {
+			resString += "\n"
+			break
+		}
+		resString += line + "\n"
+		index := strings.Index(line, ":")
+		key := line[:index]
+		value := line[index+1:]
+		res.Headers[key] = value
+	}
+
+	// print the Body
+	for scnr.Scan() {
+		line := scnr.Text()
+		resString += line + "\n"
+		res.Body = res.Body + line + "\n"
+	}
+
+	//res, err = ioutil.ReadAll(con)
+	//checkError(&err)
+
+	return res, resString
 }
 
-func parseHeader(opts *cli.Options, req string) string {
+func addHeaders(opts *cli.Options, req string) string {
 	if len(opts.Header) > 0 {
-		headers := strings.Fields(opts.Header)
-
-		for i := 0; i < len(headers); i++ {
-			index := strings.Index(headers[i], ":") + 1
-			headers[i] = headers[i][:index] + " " + headers[i][index:] + "\\r\\n"
-			req = req + headers[i]
+		for key, val := range opts.Header {
+			req = req + key + ": " + val + "\r\n"
 		}
-		lastStringIndex := len(headers) - 1
-		headers[lastStringIndex] = headers[lastStringIndex] + "\r\n"
-	} else {
-		req = req + "\r\n"
 	}
+	//req += "Connection: close\r\n" + "\r\n"
 	return req
 }
 

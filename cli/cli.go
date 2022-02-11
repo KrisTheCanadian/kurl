@@ -6,21 +6,43 @@ import (
 	"log"
 	"net/url"
 	"os"
+	"strings"
 )
 
 type Options struct {
 	Method  string
-	verbose bool
-	query   string
-	Header  string
-	data    string
-	file    string
+	Verbose bool
+	Query   string
+	Header  map[string]string
+	Data    string
+	File    string
 	Url     string
+}
+
+type headerFlags map[string]string
+
+func (h headerFlags) String() string {
+	return ""
+}
+
+func (h headerFlags) Set(s string) error {
+	if s == "" {
+		return nil
+	}
+	index := strings.Index(s, ":")
+	key := s[:index]
+	value := s[index+1:]
+	if key == "" || value == "" {
+		fmt.Println(`format should be "k:v"`)
+		os.Exit(1)
+	}
+	h[key] = value
+	return nil
 }
 
 func Parse() *Options {
 	opts := Options{}
-	getFlag, getVerboseFlag, getHeaderFlag, postFlag, postVerboseFlag, postHeaderFlag, postDataFlag, postFileFlag := initFlags()
+	getFlag, getVerboseFlag, headerFlagValue, postFlag, postVerboseFlag, postDataFlag, postFileFlag := initFlags()
 
 	if len(os.Args) < 2 {
 		UsageErrorMessage()
@@ -31,12 +53,12 @@ func Parse() *Options {
 		if len(os.Args) < 3 {
 			getErrorMessage()
 		}
-		setGetOptions(&opts, getFlag, getVerboseFlag, getHeaderFlag)
+		setGetOptions(&opts, getFlag, getVerboseFlag, &headerFlagValue)
 	case "post":
 		if len(os.Args) < 3 {
 			postErrorMessage()
 		}
-		setPostOptions(&opts, postFlag, postVerboseFlag, postHeaderFlag, postFileFlag, postDataFlag)
+		setPostOptions(&opts, postFlag, postVerboseFlag, &headerFlagValue, postFileFlag, postDataFlag)
 	case "help":
 		if len(os.Args) < 3 {
 			UsageErrorMessage()
@@ -56,11 +78,11 @@ func Parse() *Options {
 	return &opts
 }
 
-func setGetOptions(opts *Options, getFlag *flag.FlagSet, getVerboseFlag *bool, getHeaderFlag *string) {
+func setGetOptions(opts *Options, getFlag *flag.FlagSet, getVerboseFlag *bool, headerFlagValue *headerFlags) {
 	opts.Method = "GET"
 	getFlag.Parse(os.Args[2:])
-	opts.verbose = *getVerboseFlag
-	opts.Header = *getHeaderFlag
+	opts.Verbose = *getVerboseFlag
+	opts.Header = *headerFlagValue
 
 	if len(getFlag.Args()) < 0 || getFlag.Args()[0] == "" {
 		UrlErrorMessage()
@@ -69,19 +91,19 @@ func setGetOptions(opts *Options, getFlag *flag.FlagSet, getVerboseFlag *bool, g
 	ValidateUrl(opts)
 }
 
-func setPostOptions(opts *Options, postFlag *flag.FlagSet, postVerboseFlag *bool, postHeaderFlag *string, postFileFlag *string, postDataFlag *string) {
+func setPostOptions(opts *Options, postFlag *flag.FlagSet, postVerboseFlag *bool, headerFlagValue *headerFlags, postFileFlag *string, postDataFlag *string) {
 	opts.Method = "POST"
 	postFlag.Parse(os.Args[2:])
-	opts.verbose = *postVerboseFlag
-	opts.Header = *postHeaderFlag
+	opts.Verbose = *postVerboseFlag
+	opts.Header = *headerFlagValue
 
 	if *postFileFlag != "" && *postDataFlag != "" {
 		fmt.Println("Either [-d] or [-f] can be used but not both.")
 		os.Exit(1)
 	}
 
-	opts.data = *postDataFlag
-	opts.file = *postFileFlag
+	opts.Data = *postDataFlag
+	opts.File = *postFileFlag
 
 	if len(postFlag.Args()) < 0 || postFlag.Args()[0] == "" {
 		UrlErrorMessage()
@@ -91,17 +113,18 @@ func setPostOptions(opts *Options, postFlag *flag.FlagSet, postVerboseFlag *bool
 	ValidateUrl(opts)
 }
 
-func initFlags() (*flag.FlagSet, *bool, *string, *flag.FlagSet, *bool, *string, *string, *string) {
+func initFlags() (*flag.FlagSet, *bool, headerFlags, *flag.FlagSet, *bool, *string, *string) {
+	headerFlagValue := make(headerFlags, 10)
 	getFlag := flag.NewFlagSet("get", flag.ExitOnError)
 	getVerboseFlag := getFlag.Bool("v", false, "Prints the detail of the response such as protocol, status,\nand headers.")
-	getHeaderFlag := getFlag.String("h", "", "header")
+	getFlag.Var(&headerFlagValue, "h", "header")
 
 	postFlag := flag.NewFlagSet("post", flag.ExitOnError)
 	postVerboseFlag := postFlag.Bool("v", false, "Prints the detail of the response such as protocol, status,\nand headers.")
-	postHeaderFlag := postFlag.String("h", "", "header")
-	postDataFlag := postFlag.String("d", "", "Associates an inline data to the body HTTP POST request.")
-	postFileFlag := postFlag.String("f", "", "Associates the content of a file to the body HTTP POST")
-	return getFlag, getVerboseFlag, getHeaderFlag, postFlag, postVerboseFlag, postHeaderFlag, postDataFlag, postFileFlag
+	postFlag.Var(&headerFlagValue, "h", "header")
+	postDataFlag := postFlag.String("d", "d", "Associates an inline Data to the body HTTP POST request.")
+	postFileFlag := postFlag.String("f", "", "Associates the content of a File to the body HTTP POST")
+	return getFlag, getVerboseFlag, headerFlagValue, postFlag, postVerboseFlag, postDataFlag, postFileFlag
 }
 
 func ValidateUrl(opts *Options) {
@@ -139,6 +162,6 @@ func getErrorMessage() {
 }
 
 func postErrorMessage() {
-	fmt.Println("usage: httpc post [-v] [-h key:value] [-d inline-data] [-f file] URL")
+	fmt.Println("usage: httpc post [-v] [-h key:value] [-d inline-Data] [-f File] URL")
 	os.Exit(1)
 }
