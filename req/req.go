@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"fmt"
 	"github.com/kristhecanadian/kurl/cli"
+	"io/ioutil"
 	"net"
 	"net/url"
 	"os"
@@ -30,17 +31,30 @@ func Request(opts *cli.Options) (res Response, resString string) {
 	if u.RawQuery != "" {
 		qry += "?" + u.RawQuery
 	}
-	req := "" + opts.Method + " " + u.Path + qry + " HTTP/1.1\r\n"
+	req := "" + opts.Method + " " + u.Path + qry + " HTTP/1.0\r\n"
 
 	req = addHeaders(opts, req)
 
 	if opts.Method == "POST" {
-		if _, ok := opts.Header["Content-Length"]; !ok {
-			length := string(strconv.Itoa(len(opts.Data)))
-			req += "Content-Length: " + length + "\r\n"
-			opts.Header["Content-Length"] = length
+		if opts.Data != "" {
+			if _, ok := opts.Header["Content-Length"]; !ok {
+				length := strconv.Itoa(len(opts.Data))
+				req += "Content-Length: " + length + "\r\n"
+				opts.Header["Content-Length"] = length
+			}
+			req += "\r\n" + opts.Data
 		}
-		req += "\r\n" + opts.Data
+		if opts.File != "" {
+			if _, ok := opts.Header["Content-Length"]; !ok {
+				data, _ := ioutil.ReadFile(opts.File)
+				length := strconv.Itoa(len(data))
+				req += "Content-Length: " + length + "\r\n"
+				opts.Header["Content-Length"] = length
+				req += "\r\n" + string(data)
+			}
+
+		}
+
 	}
 
 	port = parseProtocol(u, port)
