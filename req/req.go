@@ -31,7 +31,7 @@ func Request(opts *cli.Options) (res Response, resString string) {
 	if u.RawQuery != "" {
 		qry += "?" + u.RawQuery
 	}
-	req := "" + opts.Method + " " + u.Path + qry + " HTTP/1.1\r\n"
+	req := "" + opts.Method + " " + u.Path + qry + " HTTP/1.0\r\n"
 
 	req = addHeaders(opts, req)
 
