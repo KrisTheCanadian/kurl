@@ -53,15 +53,16 @@ func Request(opts *cli.Options) (res Response, resString string) {
 
 	writeRequest(err, con, req)
 
-	scnr := bufio.NewScanner(con)
-
 	res = Response{}
-	ParseResponse(scnr, &res, &resString)
+
+	ParseResponse(con, &res, &resString)
 
 	return res, resString
 }
 
-func ParseResponse(scnr *bufio.Scanner, res *Response, resString *string) {
+func ParseResponse(con net.Conn, res *Response, resString *string) {
+	defer con.Close()
+	scnr := bufio.NewScanner(con)
 	// Scan status line
 	if !scnr.Scan() {
 		panic("No status line!")
