@@ -13,7 +13,7 @@ import (
 )
 
 const (
-	http int = 80
+	http int = 8080
 )
 
 type Response struct {
@@ -65,7 +65,8 @@ func ParseResponse(con net.Conn, res *Response, resString *string) {
 	scnr := bufio.NewScanner(con)
 	// Scan status line
 	if !scnr.Scan() {
-		panic("No status line!")
+		fmt.Print("No response.")
+		os.Exit(1)
 	}
 
 	line := scnr.Text()
