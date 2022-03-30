@@ -48,7 +48,15 @@ func Request(opts *cli.Options) (res Response, resString string) {
 	}
 	port = parseProtocol(u, port)
 
-	con, err := net.Dial("tcp", ""+host+":"+port)
+	address := "" + host + ":" + port
+
+	raddr, err := net.ResolveUDPAddr("udp", address)
+	if err != nil {
+		fmt.Print("Address is not resolved.")
+		return
+	}
+	
+	con, err := net.DialUDP("udp", nil, raddr)
 	checkError(&err)
 
 	writeRequest(err, con, req)
