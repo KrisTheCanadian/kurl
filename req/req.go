@@ -13,6 +13,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 const (
@@ -88,6 +89,68 @@ func Request(opts *cli.Options) (res Response, resString string) {
 	con, err := net.DialUDP("udp", nil, udpAddr)
 	checkError(&err)
 
+	m := createMessage(SYN, host)
+	fmt.Println(m)
+
+	bMessage := convertMessageToBytes(m)
+
+	// Send the SYN Request
+	_, err = con.Write(bMessage.Bytes())
+	con.Close()
+	// Start timer to send SYN again if did not receive SYN/ACK
+	buf := make([]byte, 1024)
+
+	// Start listening on port that was used in previous socket. (Switching)
+	address = con.LocalAddr().String()
+	resolveUDPAddr, err := net.ResolveUDPAddr("udp", address)
+	checkError(&err)
+	udpConn, err := net.ListenUDP("udp", resolveUDPAddr)
+
+	// Creating a deadline of 5 seconds
+	err = udpConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	checkError(&err)
+	for {
+		n, addr, err := udpConn.ReadFromUDP(buf)
+		if err != nil {
+			if e, ok := err.(net.Error); !ok || !e.Timeout() {
+				log.Fatal(err)
+			}
+			break
+		}
+		fmt.Println(buf[:n])
+		fmt.Println("Received a packet as a response! from " + addr.String())
+		// do something with packet here
+	}
+	// WAIT FOR SYN/ACK
+	// OR TIMER
+	// SELECT IN GO -> Switch statement with channels . Channel with time, Channel for the SYN/ACK
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// HTTP STUFF
+	writeRequest(err, con, req)
+
+	res = Response{}
+
+	ParseResponse(con, &res, &resString)
+
+	return res, resString
+}
+
+func convertMessageToBytes(m encodedMessage) bytes.Buffer {
+	// create the message buffer
+	var bMessage bytes.Buffer
+	bMessage.Write(m.packetType[:])
+	bMessage.Write(m.sequenceNumber[:])
+	bMessage.Write(m.peerAddress[:])
+	bMessage.Write(m.peerPort[:])
+	bMessage.Write(m.payload)
+	return bMessage
+}
+
+func createMessage(packetType uint8, host string) encodedMessage {
 	// Parse the address
 	octets := strings.Split(host, ".")
 
@@ -108,36 +171,33 @@ func Request(opts *cli.Options) (res Response, resString string) {
 
 	// Start Handshake
 	// SYN MESSAGE
-	m := encodedMessage{packetType: [1]byte{SYN}, sequenceNumber: sequenceNumberBuffer, peerAddress: bAddress, peerPort: portBuffer, payload: []byte("0")}
-	fmt.Println(m)
+	m := encodedMessage{packetType: [1]byte{packetType}, sequenceNumber: sequenceNumberBuffer, peerAddress: bAddress, peerPort: portBuffer, payload: []byte("0")}
+	return m
+}
 
-	// create the message buffer
-	var bMessage bytes.Buffer
-	bMessage.Write(m.packetType[:])
-	bMessage.Write(m.sequenceNumber[:])
-	bMessage.Write(m.peerAddress[:])
-	bMessage.Write(m.peerPort[:])
-	bMessage.Write(m.payload)
+func parseMessage(buf []byte, err error, n int) message {
+	// Parse the address
+	bAddressOctet0 := buf[5]
+	bAddressOctet1 := buf[6]
+	bAddressOctet2 := buf[7]
+	bAddressOctet3 := buf[8]
 
-	// Send the SYN Request
-	_, err = con.Write(bMessage.Bytes())
-	// Start timer to send SYN again if did not receive SYN/ACK
-	// WAIT FOR SYN/ACK
-	// OR TIMER
-	// SELECT IN GO -> Switch statement with channels . Channel with time, Channel for the SYN/ACK
+	addressInt0 := strconv.Itoa(int(bAddressOctet0))
+	addressInt1 := strconv.Itoa(int(bAddressOctet1))
+	addressInt2 := strconv.Itoa(int(bAddressOctet2))
+	addressInt3 := strconv.Itoa(int(bAddressOctet3))
 
-	if err != nil {
-		log.Fatal(err)
-	}
+	host := addressInt0 + "." + addressInt1 + "." + addressInt2 + "." + addressInt3
 
-	// HTTP STUFF
-	writeRequest(err, con, req)
+	port := binary.LittleEndian.Uint16(buf[9:11])
 
-	res = Response{}
-
-	ParseResponse(con, &res, &resString)
-
-	return res, resString
+	m := message{}
+	m.packetType = buf[0]
+	m.sequenceNumber = binary.BigEndian.Uint32(buf[1:5])
+	m.peerAddress = host
+	m.peerPort = port
+	m.payload = string(buf[11:n])
+	return m
 }
 
 func ParseResponse(con net.Conn, res *Response, resString *string) {
