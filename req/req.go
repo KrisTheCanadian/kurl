@@ -2,9 +2,12 @@ package req
 
 import (
 	"bufio"
+	"bytes"
+	"encoding/binary"
 	"fmt"
 	"github.com/kristhecanadian/kurl/cli"
 	"io/ioutil"
+	"log"
 	"net"
 	"net/url"
 	"os"
@@ -16,11 +19,36 @@ const (
 	http int = 8080
 )
 
+const (
+	ACK    uint8 = 0
+	SYN    uint8 = 1
+	FIN    uint8 = 2
+	NACK   uint8 = 3
+	SYNACK uint8 = 4
+)
+
 type Response struct {
 	Proto      string
 	StatusCode int
 	Headers    map[string]string
 	Body       string
+}
+
+type encodedMessage struct {
+	packetType     [1]byte
+	sequenceNumber [4]byte
+	peerAddress    [4]byte
+	peerPort       [2]byte
+	// Size 1013
+	payload []byte
+}
+
+type message struct {
+	packetType     uint8
+	sequenceNumber uint32
+	peerAddress    string
+	peerPort       uint16
+	payload        string
 }
 
 func Request(opts *cli.Options) (res Response, resString string) {
@@ -50,15 +78,59 @@ func Request(opts *cli.Options) (res Response, resString string) {
 
 	address := "" + host + ":" + port
 
-	raddr, err := net.ResolveUDPAddr("udp", address)
+	udpAddr, err := net.ResolveUDPAddr("udp", address)
 	if err != nil {
 		fmt.Print("Address is not resolved.")
 		return
 	}
-	
-	con, err := net.DialUDP("udp", nil, raddr)
+
+	// Start Connection
+	con, err := net.DialUDP("udp", nil, udpAddr)
 	checkError(&err)
 
+	// Parse the address
+	octets := strings.Split(host, ".")
+
+	octet0, _ := strconv.Atoi(octets[0])
+	octet1, _ := strconv.Atoi(octets[1])
+	octet2, _ := strconv.Atoi(octets[2])
+	octet3, _ := strconv.Atoi(octets[3])
+
+	bAddress := [4]byte{byte(octet0), byte(octet1), byte(octet2), byte(octet3)}
+
+	fmt.Printf("%s has 4-byte representation of %bAddress\n", host, bAddress)
+
+	portBuffer := [2]byte{}
+	binary.LittleEndian.PutUint16(portBuffer[:], 8080)
+
+	sequenceNumberBuffer := [4]byte{}
+	binary.BigEndian.PutUint32(sequenceNumberBuffer[:], 0)
+
+	// Start Handshake
+	// SYN MESSAGE
+	m := encodedMessage{packetType: [1]byte{SYN}, sequenceNumber: sequenceNumberBuffer, peerAddress: bAddress, peerPort: portBuffer, payload: []byte("0")}
+	fmt.Println(m)
+
+	// create the message buffer
+	var bMessage bytes.Buffer
+	bMessage.Write(m.packetType[:])
+	bMessage.Write(m.sequenceNumber[:])
+	bMessage.Write(m.peerAddress[:])
+	bMessage.Write(m.peerPort[:])
+	bMessage.Write(m.payload)
+
+	// Send the SYN Request
+	_, err = con.Write(bMessage.Bytes())
+	// Start timer to send SYN again if did not receive SYN/ACK
+	// WAIT FOR SYN/ACK
+	// OR TIMER
+	// SELECT IN GO -> Switch statement with channels . Channel with time, Channel for the SYN/ACK
+
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	// HTTP STUFF
 	writeRequest(err, con, req)
 
 	res = Response{}
