@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"github.com/kristhecanadian/kurl/cli"
 	"io/ioutil"
-	"log"
 	"net"
 	"net/url"
 	"os"
@@ -26,6 +25,7 @@ const (
 	FIN    uint8 = 2
 	NACK   uint8 = 3
 	SYNACK uint8 = 4
+	DATA   uint8 = 5
 )
 
 type Response struct {
@@ -53,6 +53,123 @@ type message struct {
 }
 
 func Request(opts *cli.Options) (res Response, resString string) {
+	u, host, port, req := creatingHttpRequest(opts)
+	port = parseProtocol(u, port)
+
+	address := "" + host + ":" + port
+
+	udpAddr, err := net.ResolveUDPAddr("udp", address)
+	checkError(&err)
+
+	udpConn, bMessage := initializeHandshake(udpAddr, port, host)
+	checkError(&err)
+
+	// Start listening on port that was used in previous socket. (Switching)
+	address = udpConn.LocalAddr().String()
+	resolveUDPAddr, err := net.ResolveUDPAddr("udp", address)
+	checkError(&err)
+
+	listenUDP, err := net.ListenUDP("udp", resolveUDPAddr)
+
+	// Creating a deadline of 10 seconds
+	// Start timer to send SYN again if did not receive SYN/ACK
+	err = listenUDP.SetReadDeadline(time.Now().Add(10 * time.Second))
+	checkError(&err)
+	var resolveRemoteUDPAddr *net.UDPAddr
+	for {
+		buf := make([]byte, 1024)
+		n, addr, err := listenUDP.ReadFromUDP(buf)
+		if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
+			// resend the SYN Request
+
+			// Close listener
+			err := listenUDP.Close()
+			checkError(&err)
+
+			// Initialize the 8080 Socket to resend the SYN packet
+			initializeHandshake(udpAddr, port, host)
+
+			// Reinitializing the ListenUDP
+			listenUDP, err = net.ListenUDP("udp", resolveUDPAddr)
+			checkError(&err)
+
+			// Re-add the deadline
+			err = listenUDP.SetReadDeadline(time.Now().Add(15 * time.Second))
+			checkError(&err)
+			continue
+		}
+		if err != nil {
+			if e, ok := err.(net.Error); !ok || !e.Timeout() {
+				continue
+			}
+		}
+		fmt.Println(buf[:n])
+		fmt.Println("Received a packet as a response! from " + addr.String())
+
+		// CHECK FOR SYN/ACK
+		m := parseMessage(buf, err, n)
+		if m.packetType != SYNACK {
+			// ignore it and continue waiting
+			continue
+		}
+
+		// Start Connection with socket handler from server side.
+		err = listenUDP.Close()
+		checkError(&err)
+
+		// Reusing the local address previously used on the connection (Switching)
+		resolveLocalUDPAddr, err := net.ResolveUDPAddr("udp", listenUDP.LocalAddr().String())
+		checkError(&err)
+
+		// Reusing the remote address previously used on the connection (Switching)
+		resolveRemoteUDPAddr, err = net.ResolveUDPAddr("udp", addr.String())
+		checkError(&err)
+
+		udpConn, err = net.DialUDP("udp", resolveLocalUDPAddr, resolveRemoteUDPAddr)
+		checkError(&err)
+
+		payloadBuffer := make([]byte, 1024)
+		payloadBufferWriter := bytes.NewBuffer(payloadBuffer)
+		payloadBufferWriter.WriteString("0")
+		// SEND ACK BACK TO CLIENT TO FINISH HANDSHAKE
+		ackMessage := createMessage(ACK, 2, addr.IP.String(), addr.Port, payloadBufferWriter.Bytes())
+		bMessage = convertMessageToBytes(ackMessage)
+
+		// Send the ACK for the server
+		_, err = udpConn.Write(bMessage.Bytes())
+		fmt.Println(bMessage.Bytes())
+		checkError(&err)
+
+		fmt.Println("Sending ACK to server on IP: " + udpConn.RemoteAddr().String())
+		fmt.Println("Handshake Completed.")
+		break
+	}
+	// TODO Handle ACK DROP -> Keep listening on a different channel?
+	// TEMP FIX? IF RECEIVE ANOTHER SYN/ACK JUST ACK IT.
+	// Create Frames and Sequence Numbers for HTTP Request
+	// TODO SPLIT THE REQUEST INTO MANY FRAMES IF TOO LARGE
+	frames := make(map[int]encodedMessage)
+	ackedFrames := make(map[int]bool)
+
+	breq := []byte(req)
+	requestLength := len(breq)
+	fmt.Println(requestLength)
+
+	m := createMessage(DATA, 10, resolveRemoteUDPAddr.IP.String(), resolveRemoteUDPAddr.Port, breq)
+	frames[10] = m
+	bMessage = convertMessageToBytes(m)
+	// SEND THE MESSAGE FRAMES
+	_, err = udpConn.Write(bMessage.Bytes())
+	
+	res = Response{}
+
+	ParseResponse(udpConn, &res, &resString)
+
+	return res, resString
+
+}
+
+func creatingHttpRequest(opts *cli.Options) (*url.URL, string, string, string) {
 	u := parseUrl(opts)
 	host := u.Host
 	port := u.Port()
@@ -75,68 +192,33 @@ func Request(opts *cli.Options) (res Response, resString string) {
 	} else {
 		req += "\r\n"
 	}
-	port = parseProtocol(u, port)
+	return u, host, port, req
+}
 
-	address := "" + host + ":" + port
-
-	udpAddr, err := net.ResolveUDPAddr("udp", address)
-	if err != nil {
-		fmt.Print("Address is not resolved.")
-		return
-	}
-
+func initializeHandshake(udpAddr *net.UDPAddr, port string, host string) (*net.UDPConn, bytes.Buffer) {
 	// Start Connection
-	con, err := net.DialUDP("udp", nil, udpAddr)
+	udpConn, err := net.DialUDP("udp", nil, udpAddr)
+	checkError(&err)
+	intPort, err := strconv.Atoi(port)
 	checkError(&err)
 
-	m := createMessage(SYN, host)
+	payloadBuffer := make([]byte, 1024)
+	payloadBufferWriter := bytes.NewBuffer(payloadBuffer)
+	payloadBufferWriter.WriteString("0")
+
+	m := createMessage(SYN, 1, host, intPort, payloadBufferWriter.Bytes())
 	fmt.Println(m)
 
 	bMessage := convertMessageToBytes(m)
 
 	// Send the SYN Request
-	_, err = con.Write(bMessage.Bytes())
-	con.Close()
-	// Start timer to send SYN again if did not receive SYN/ACK
-	buf := make([]byte, 1024)
-
-	// Start listening on port that was used in previous socket. (Switching)
-	address = con.LocalAddr().String()
-	resolveUDPAddr, err := net.ResolveUDPAddr("udp", address)
+	_, err = udpConn.Write(bMessage.Bytes())
 	checkError(&err)
-	udpConn, err := net.ListenUDP("udp", resolveUDPAddr)
 
-	// Creating a deadline of 5 seconds
-	err = udpConn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	// Close the 8080 port connection.
+	err = udpConn.Close()
 	checkError(&err)
-	for {
-		n, addr, err := udpConn.ReadFromUDP(buf)
-		if err != nil {
-			if e, ok := err.(net.Error); !ok || !e.Timeout() {
-				log.Fatal(err)
-			}
-			break
-		}
-		fmt.Println(buf[:n])
-		fmt.Println("Received a packet as a response! from " + addr.String())
-		// do something with packet here
-	}
-	// WAIT FOR SYN/ACK
-	// OR TIMER
-	// SELECT IN GO -> Switch statement with channels . Channel with time, Channel for the SYN/ACK
-
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	// HTTP STUFF
-	writeRequest(err, con, req)
-
-	res = Response{}
-
-	ParseResponse(con, &res, &resString)
-
-	return res, resString
+	return udpConn, bMessage
 }
 
 func convertMessageToBytes(m encodedMessage) bytes.Buffer {
@@ -150,7 +232,7 @@ func convertMessageToBytes(m encodedMessage) bytes.Buffer {
 	return bMessage
 }
 
-func createMessage(packetType uint8, host string) encodedMessage {
+func createMessage(packetType uint8, sequenceNumber int, host string, port int, payload []byte) encodedMessage {
 	// Parse the address
 	octets := strings.Split(host, ".")
 
@@ -161,17 +243,15 @@ func createMessage(packetType uint8, host string) encodedMessage {
 
 	bAddress := [4]byte{byte(octet0), byte(octet1), byte(octet2), byte(octet3)}
 
-	fmt.Printf("%s has 4-byte representation of %bAddress\n", host, bAddress)
-
 	portBuffer := [2]byte{}
-	binary.LittleEndian.PutUint16(portBuffer[:], 8080)
+	binary.LittleEndian.PutUint16(portBuffer[:], uint16(port))
 
 	sequenceNumberBuffer := [4]byte{}
-	binary.BigEndian.PutUint32(sequenceNumberBuffer[:], 0)
+	binary.BigEndian.PutUint32(sequenceNumberBuffer[:], uint32(sequenceNumber))
 
 	// Start Handshake
 	// SYN MESSAGE
-	m := encodedMessage{packetType: [1]byte{packetType}, sequenceNumber: sequenceNumberBuffer, peerAddress: bAddress, peerPort: portBuffer, payload: []byte("0")}
+	m := encodedMessage{packetType: [1]byte{packetType}, sequenceNumber: sequenceNumberBuffer, peerAddress: bAddress, peerPort: portBuffer, payload: payload}
 	return m
 }
 
@@ -240,11 +320,6 @@ func ParseResponse(con net.Conn, res *Response, resString *string) {
 		*resString += line + "\n"
 		res.Body = res.Body + line + "\n"
 	}
-}
-
-func writeRequest(err error, con net.Conn, req string) {
-	_, err = con.Write([]byte(req))
-	checkError(&err)
 }
 
 func parseInlineData(opts *cli.Options, req *string) {
