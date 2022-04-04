@@ -139,18 +139,18 @@ func handleFrameAcks(err error, udpConn *net.UDPConn, ackedFrames map[int]bool, 
 
 			handleSYNACKAfterConnection(port, host, udpConn)
 			continue
+		} else if m.packetType == DATA {
+			return
 		}
 		// CHECK IF SEQUENCE MATCHES A PACKET SENT
 		frameNumber := int(m.sequenceNumber)
-		if _, ok := ackedFrames[frameNumber]; ok {
-			if ackedFrames[frameNumber] {
-				// We already received this
-				continue
-			}
-			fmt.Println("Ack packet received for frame:" + strconv.Itoa(frameNumber))
-			ackedFrames[frameNumber] = true
-			err = udpConn.SetReadDeadline(time.Now().Add(8 * time.Second))
+		if ackedFrames[frameNumber] {
+			// We already received this
+			continue
 		}
+		fmt.Println("Ack packet received for frame:" + strconv.Itoa(frameNumber))
+		ackedFrames[frameNumber] = true
+		err = udpConn.SetReadDeadline(time.Now().Add(8 * time.Second))
 	}
 }
 
