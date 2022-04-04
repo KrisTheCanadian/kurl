@@ -3,7 +3,6 @@ package cli
 import (
 	"flag"
 	"fmt"
-	"log"
 	"net/url"
 	"os"
 	"strings"
@@ -135,7 +134,7 @@ func initFlags() (*flag.FlagSet, *bool, headerFlags, *flag.FlagSet, *bool, *stri
 func ValidateUrl(opts *Options) {
 	_, err := url.ParseRequestURI(opts.Url)
 	if err != nil {
-		log.Printf("Invalid Url")
+		fmt.Printf("Invalid Url")
 		os.Exit(1)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"github.com/kristhecanadian/kurl/cli"
 	"io/ioutil"
+	"log"
 	"net"
 	"net/url"
 	"os"
@@ -130,17 +131,20 @@ func handleFrameAcks(err error, udpConn *net.UDPConn, ackedFrames map[int]bool, 
 		// CHECK FOR ACK
 		m := parseMessage(buf, n)
 
-		fmt.Println("Received a " + strconv.Itoa(int(m.packetType)) + " packet as a response! from " + addr.String())
+		log.Println("Received a " + strconv.Itoa(int(m.packetType)) + " packet as a response! from " + addr.String())
+
+		if m.packetType == SYNACK {
+			handleSYNACKAfterConnection(port, host, udpConn)
+			continue
+		}
+
+		if m.packetType == DATA {
+			break
+		}
 
 		if m.packetType != ACK {
 			// ignore it and continue waiting
 			continue
-		} else if m.packetType == SYNACK {
-
-			handleSYNACKAfterConnection(port, host, udpConn)
-			continue
-		} else if m.packetType == DATA {
-			return
 		}
 		// CHECK IF SEQUENCE MATCHES A PACKET SENT
 		frameNumber := int(m.sequenceNumber)
@@ -148,7 +152,7 @@ func handleFrameAcks(err error, udpConn *net.UDPConn, ackedFrames map[int]bool, 
 			// We already received this
 			continue
 		}
-		fmt.Println("Ack packet received for frame:" + strconv.Itoa(frameNumber))
+		log.Println("Ack packet received for frame:" + strconv.Itoa(frameNumber))
 		ackedFrames[frameNumber] = true
 		err = udpConn.SetReadDeadline(time.Now().Add(8 * time.Second))
 	}
@@ -181,7 +185,7 @@ func sendFrames(frames map[int]encodedMessage, bMessage bytes.Buffer, udpConn *n
 		checkError(&err)
 		ackedFrames[frameNumber] = false
 	}
-	fmt.Println("Sent all frames!")
+	log.Println("Sent all frames!")
 	return bMessage
 }
 
@@ -257,11 +261,14 @@ func handleResFrames(udpConn *net.UDPConn, port string) map[int]message {
 		}
 		// CHECK FOR DATA
 		m := parseMessage(buf, n)
+
+		if m.packetType == SYNACK {
+			handleSYNACKAfterConnection(port, udpConn.LocalAddr().String(), udpConn)
+			continue
+		}
+
 		if m.packetType != DATA {
 			// ignore it and continue waiting
-			continue
-		} else if m.packetType == SYNACK {
-			handleSYNACKAfterConnection(port, udpConn.LocalAddr().String(), udpConn)
 			continue
 		}
 		// set first time received to true
@@ -278,11 +285,11 @@ func handleResFrames(udpConn *net.UDPConn, port string) map[int]message {
 		ackPacket := createMessage(ACK, int(m.sequenceNumber), ipAddress, intPort, payloadBufferWriter.Bytes())
 		bAckPacket := convertMessageToBytes(ackPacket)
 
-		fmt.Println("Data packet received frame #:" + strconv.Itoa(int(m.sequenceNumber)))
+		log.Println("Data packet received frame #:" + strconv.Itoa(int(m.sequenceNumber)))
 
 		// sending ACK
 		_, err = udpConn.Write(bAckPacket.Bytes())
-		fmt.Println("Ack packet sent for frame #:" + strconv.Itoa(int(m.sequenceNumber)))
+		log.Println("Ack packet sent for frame #:" + strconv.Itoa(int(m.sequenceNumber)))
 		err = udpConn.SetReadDeadline(time.Now().Add(6 * time.Second))
 	}
 	return frames
@@ -352,7 +359,7 @@ func handleHandshake(address string, udpConn *net.UDPConn, udpAddr *net.UDPAddr,
 		// CHECK FOR SYN/ACK
 		m := parseMessage(buf, n)
 
-		fmt.Println("Received a " + strconv.Itoa(int(m.packetType)) + " packet as a response! from " + addr.String())
+		log.Println("Received a " + strconv.Itoa(int(m.packetType)) + " packet as a response! from " + addr.String())
 
 		if m.packetType != SYNACK {
 			// ignore it and continue waiting
@@ -388,8 +395,8 @@ func handleHandshake(address string, udpConn *net.UDPConn, udpAddr *net.UDPAddr,
 		_, err = udpConn.Write(bMessage.Bytes())
 		checkError(&err)
 
-		fmt.Println("Sending ACK to server on IP: " + udpConn.RemoteAddr().String())
-		fmt.Println("Handshake Completed.")
+		log.Println("Sending ACK to server on IP: " + udpConn.RemoteAddr().String())
+		log.Println("Handshake Completed.")
 		break
 	}
 	return udpConn, bMessage, port
@@ -444,7 +451,7 @@ func initializeHandshake(udpAddr *net.UDPAddr, port string, host string) (*net.U
 	bMessage := convertMessageToBytes(m)
 
 	// Send the SYN Request
-	fmt.Println("SYN packet sent to " + host + ":" + port)
+	log.Println("SYN packet sent to " + host + ":" + port)
 	_, err = udpConn.Write(bMessage.Bytes())
 	checkError(&err)
 
