@@ -126,10 +126,12 @@ func handleFrameAcks(err error, udpConn *net.UDPConn, ackedFrames map[int]bool, 
 				continue
 			}
 		}
-		fmt.Println("Received a packet as a response! from " + addr.String())
 
 		// CHECK FOR ACK
 		m := parseMessage(buf, n)
+
+		fmt.Println("Received a " + strconv.Itoa(int(m.packetType)) + " packet as a response! from " + addr.String())
+
 		if m.packetType != ACK {
 			// ignore it and continue waiting
 			continue
@@ -179,7 +181,7 @@ func sendFrames(frames map[int]encodedMessage, bMessage bytes.Buffer, udpConn *n
 		checkError(&err)
 		ackedFrames[frameNumber] = false
 	}
-	fmt.Print("Sent all frames!")
+	fmt.Println("Sent all frames!")
 	return bMessage
 }
 
@@ -309,16 +311,13 @@ func split(buf []byte, lim int) [][]byte {
 }
 
 func handleHandshake(address string, udpConn *net.UDPConn, udpAddr *net.UDPAddr, port string, host string, bMessage bytes.Buffer) (*net.UDPConn, bytes.Buffer, string) {
-	// Start listening on port that was used in previous socket. (Switching)
-	address = udpConn.LocalAddr().String()
-	resolveUDPAddr, err := net.ResolveUDPAddr("udp", address)
-	checkError(&err)
+	resolveUDPAddr := resolveAddress(address, udpConn)
 
 	listenUDP, err := net.ListenUDP("udp", resolveUDPAddr)
 
 	// Creating a deadline of 10 seconds
 	// Start timer to send SYN again if did not receive SYN/ACK
-	err = listenUDP.SetReadDeadline(time.Now().Add(6 * time.Second))
+	err = listenUDP.SetReadDeadline(time.Now().Add(10 * time.Second))
 	checkError(&err)
 	var resolveRemoteUDPAddr *net.UDPAddr
 	for {
@@ -332,14 +331,15 @@ func handleHandshake(address string, udpConn *net.UDPConn, udpAddr *net.UDPAddr,
 			checkError(&err)
 
 			// Initialize the 8080 Socket to resend the SYN packet
-			initializeHandshake(udpAddr, port, host)
+			udpConn, _ = initializeHandshake(udpAddr, port, host)
+			resolveUDPAddr = resolveAddress(address, udpConn)
 
 			// Reinitializing the ListenUDP
 			listenUDP, err = net.ListenUDP("udp", resolveUDPAddr)
 			checkError(&err)
 
 			// Re-add the deadline
-			err = listenUDP.SetReadDeadline(time.Now().Add(6 * time.Second))
+			err = listenUDP.SetReadDeadline(time.Now().Add(10 * time.Second))
 			checkError(&err)
 			continue
 		}
@@ -348,10 +348,12 @@ func handleHandshake(address string, udpConn *net.UDPConn, udpAddr *net.UDPAddr,
 				continue
 			}
 		}
-		fmt.Println("Received a packet as a response! from " + addr.String())
 
 		// CHECK FOR SYN/ACK
 		m := parseMessage(buf, n)
+
+		fmt.Println("Received a " + strconv.Itoa(int(m.packetType)) + " packet as a response! from " + addr.String())
+
 		if m.packetType != SYNACK {
 			// ignore it and continue waiting
 			continue
@@ -391,6 +393,14 @@ func handleHandshake(address string, udpConn *net.UDPConn, udpAddr *net.UDPAddr,
 		break
 	}
 	return udpConn, bMessage, port
+}
+
+func resolveAddress(address string, udpConn *net.UDPConn) *net.UDPAddr {
+	// Start listening on port that was used in previous socket. (Switching)
+	address = udpConn.LocalAddr().String()
+	resolveUDPAddr, err := net.ResolveUDPAddr("udp", address)
+	checkError(&err)
+	return resolveUDPAddr
 }
 
 func creatingHttpRequest(opts *cli.Options) (*url.URL, string, string, string) {
@@ -508,7 +518,7 @@ func ParseResponse(payload string, res *Response, resString *string) {
 	scnr := bufio.NewScanner(r)
 	// Scan status line
 	if !scnr.Scan() {
-		fmt.Print("No response.")
+		fmt.Println("No response.")
 		os.Exit(1)
 	}
 
