@@ -24,6 +24,7 @@ const (
 	NACK   uint8 = 3
 	SYNACK uint8 = 4
 	DATA   uint8 = 5
+	FINACK uint8 = 6
 )
 
 type Response struct {
@@ -77,11 +78,25 @@ func Request(opts *cli.Options) (res Response, resString string) {
 
 	bMessage = sendFrames(frames, bMessage, udpConn, ackedFrames)
 
-	handleFrameAcks(err, udpConn, ackedFrames, frames, bMessage, port, host)
+	handleFrameAcks(err, udpConn, ackedFrames, frames, bMessage, port, host, ACK)
 
 	resFrames := handleResFrames(udpConn, port)
 	sbPayload := parseFrames(resFrames)
 
+	// Send FIN
+	frames, bFinMessage, err, ackedFrames := sendPacket(frames, port, host, err, udpConn, ackedFrames, FIN, 70)
+	log.Println("Sent FIN Packet!")
+
+	// Wait for FIN/ACK (Send again after certain amount of time)
+	handleOnePacket(err, udpConn, ackedFrames, frames, bFinMessage, port, host, FINACK)
+	log.Println("Received FIN/ACK Packet!")
+
+	// send ACK
+	log.Println("Sending ACK Packet...")
+	frames, bFinMessage, err, ackedFrames = sendPacket(frames, port, host, err, udpConn, ackedFrames, ACK, 71)
+	log.Println("Sent ACK Packet!")
+	// Parse the HTTP and terminate.
+	log.Println("Connection with server is now closed!")
 	res = Response{}
 
 	ParseResponse(sbPayload.String(), &res, &resString)
@@ -90,7 +105,77 @@ func Request(opts *cli.Options) (res Response, resString string) {
 
 }
 
-func handleFrameAcks(err error, udpConn *net.UDPConn, ackedFrames map[int]bool, frames map[int]encodedMessage, bMessage bytes.Buffer, port string, host string) {
+func handleOnePacket(err error, udpConn *net.UDPConn, ackedFrames map[int]bool, frames map[int]encodedMessage, bMessage bytes.Buffer, port string, host string, packetType uint8) {
+	// START WAITING FOR THOSE ACK FRAMES
+	err = udpConn.SetReadDeadline(time.Now().Add(8 * time.Second))
+	checkError(&err)
+	count := 10
+	for {
+		buf := make([]byte, 1024)
+		n, addr, err := udpConn.ReadFromUDP(buf)
+		if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
+			// CHECK ACKED Frames
+			for frameNumber, isAcked := range ackedFrames {
+				if !isAcked {
+					frameMessage := frames[frameNumber]
+					bMessage = convertMessageToBytes(frameMessage)
+					_, err = udpConn.Write(bMessage.Bytes())
+					checkError(&err)
+					log.Println("Sent a " + strconv.Itoa(frameNumber) + " packet again")
+				}
+			}
+			// RESET TIMER
+			err = udpConn.SetReadDeadline(time.Now().Add(8 * time.Second))
+			count--
+			if count < 0 {
+				break
+			}
+			continue
+		}
+		if err != nil {
+			if e, ok := err.(net.Error); !ok || !e.Timeout() {
+				continue
+			}
+		}
+
+		// CHECK FOR ACK
+		m := parseMessage(buf, n)
+
+		log.Println("Received a " + strconv.Itoa(int(m.packetType)) + " packet as a response! from " + addr.String())
+
+		if m.packetType != packetType {
+			// ignore it and continue waiting
+			continue
+		}
+		// CHECK IF SEQUENCE MATCHES A PACKET SENT
+		frameNumber := int(m.sequenceNumber)
+		log.Println("packet type " + strconv.Itoa(int(m.packetType)) + " received for frame:" + strconv.Itoa(frameNumber))
+		ackedFrames[frameNumber] = true
+		err = udpConn.SetReadDeadline(time.Now().Add(8 * time.Second))
+		break
+	}
+}
+
+func sendPacket(frames map[int]encodedMessage, port string, host string, err error, udpConn *net.UDPConn, ackedFrames map[int]bool, packetType uint8, frameNumber int) (map[int]encodedMessage, bytes.Buffer, error, map[int]bool) {
+	// SEND THE MESSAGE FRAMES
+	// encode the FIN Packet
+	frames = make(map[int]encodedMessage)
+	payloadBuffer := make([]byte, 50)
+	payloadBufferWriter := bytes.NewBuffer(payloadBuffer)
+	payloadBufferWriter.WriteString("0")
+	sPort, _ := strconv.Atoi(port)
+	m := createMessage(packetType, frameNumber, host, sPort, payloadBufferWriter.Bytes())
+	frames[frameNumber] = m
+	messageToBytes := convertMessageToBytes(m)
+	// send it to the client
+	_, err = udpConn.Write(messageToBytes.Bytes())
+	checkError(&err)
+	ackedFrames = make(map[int]bool)
+	ackedFrames[frameNumber] = false
+	return frames, messageToBytes, err, ackedFrames
+}
+
+func handleFrameAcks(err error, udpConn *net.UDPConn, ackedFrames map[int]bool, frames map[int]encodedMessage, bMessage bytes.Buffer, port string, host string, packetType uint8) {
 	// START WAITING FOR THOSE ACK FRAMES
 	err = udpConn.SetReadDeadline(time.Now().Add(8 * time.Second))
 	checkError(&err)
@@ -108,6 +193,7 @@ func handleFrameAcks(err error, udpConn *net.UDPConn, ackedFrames map[int]bool, 
 					bMessage = convertMessageToBytes(frameMessage)
 					_, err = udpConn.Write(bMessage.Bytes())
 					checkError(&err)
+					log.Println("Sent a " + strconv.Itoa(frameNumber) + " packet again")
 				}
 			}
 			if isAllAcked {
@@ -142,7 +228,7 @@ func handleFrameAcks(err error, udpConn *net.UDPConn, ackedFrames map[int]bool, 
 			break
 		}
 
-		if m.packetType != ACK {
+		if m.packetType != packetType {
 			// ignore it and continue waiting
 			continue
 		}
@@ -152,7 +238,8 @@ func handleFrameAcks(err error, udpConn *net.UDPConn, ackedFrames map[int]bool, 
 			// We already received this
 			continue
 		}
-		log.Println("Ack packet received for frame:" + strconv.Itoa(frameNumber))
+
+		log.Println("packet type " + strconv.Itoa(int(m.packetType)) + " received for frame:" + strconv.Itoa(frameNumber))
 		ackedFrames[frameNumber] = true
 		err = udpConn.SetReadDeadline(time.Now().Add(8 * time.Second))
 	}
@@ -184,6 +271,7 @@ func sendFrames(frames map[int]encodedMessage, bMessage bytes.Buffer, udpConn *n
 		_, err := udpConn.Write(bMessage.Bytes())
 		checkError(&err)
 		ackedFrames[frameNumber] = false
+		log.Println("Sent frame: " + strconv.Itoa(frameNumber))
 	}
 	log.Println("Sent all frames!")
 	return bMessage
@@ -247,7 +335,32 @@ func handleResFrames(udpConn *net.UDPConn, port string) map[int]message {
 				length := len(frameNumbers)
 				dif := frameNumbers[len(frameNumbers)-1] - frameNumbers[0]
 				if length-1 == dif {
-					break
+					// TODO Check for the content length header, check to see if it works with payload.
+					res := Response{}
+					resString := ""
+					sbPayload := parseFrames(frames)
+					ParseResponse(sbPayload.String(), &res, &resString)
+					if err != nil {
+						// we are obviously missing data!
+						// cannot correctly parse the request
+						continue
+					}
+					// grab the content length header
+					// check if it matches the payload
+					contentLength := res.Headers["Content-Length"]
+					if contentLength == "" {
+						break
+					}
+					// remove space
+					split := strings.Split(contentLength, " ")
+
+					intContentLength, err := strconv.Atoi(split[1])
+					checkError(&err)
+
+					if len(res.Body)-1 == intContentLength {
+						break
+					}
+					continue
 				}
 
 			}
