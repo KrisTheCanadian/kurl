@@ -335,7 +335,6 @@ func handleResFrames(udpConn *net.UDPConn, port string) map[int]message {
 				length := len(frameNumbers)
 				dif := frameNumbers[len(frameNumbers)-1] - frameNumbers[0]
 				if length-1 == dif {
-					// TODO Check for the content length header, check to see if it works with payload.
 					res := Response{}
 					resString := ""
 					sbPayload := parseFrames(frames)
